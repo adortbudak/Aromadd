@@ -12,6 +12,7 @@ import logging
 from collections.abc import Callable
 
 from bleak import BleakClient
+from homeassistant.util import dt as dt_util
 from bleak.backends.characteristic import BleakGATTCharacteristic
 from bleak.backends.device import BLEDevice
 from bleak_retry_connector import (
@@ -255,3 +256,159 @@ class AromaddDevice:
                 await client.disconnect()
 
         self._notify_listeners()
+
+    # ------------------------------------------------------------------
+    # Schedule / clock (protocol decoded from app captures)
+    #   57 16 <day-mask> + 5 x 9-byte slots  -> ack 57 16 41 43 4b ("ACK")
+    #   57 17 YYYY MM DD hh mm ss <weekday>   -> ack 57 17 41 43 4b
+    #   52 15                                 -> 7 x (5 x 9-byte slots)
+    # slot = start_h start_m end_h end_m enabled work_s(2, BE) pause_s(2, BE)
+    # ------------------------------------------------------------------
+
+    async def _exchange(
+        self, frames: list[tuple[bytes, bytes]], attempts: int = 2
+    ) -> dict[bytes, bytes]:
+        """Run :meth:`_exchange_once`, retrying once (the first connect after idle
+        sometimes times out)."""
+        last_err: Exception | None = None
+        for attempt in range(1, attempts + 1):
+            try:
+                return await self._exchange_once(frames)
+            except Exception as err:  # noqa: BLE001
+                last_err = err
+                _LOGGER.debug("exchange attempt %s/%s failed: %s", attempt, attempts, err)
+        raise RuntimeError(f"Diffuser did not respond: {last_err}") from last_err
+
+    async def _exchange_once(
+        self, frames: list[tuple[bytes, bytes]]
+    ) -> dict[bytes, bytes]:
+        """Connect once, send frames, wait for each reply; return reply payloads.
+
+        ``frames`` is a list of (payload, expected_reply_prefix). Notification
+        fragments are reassembled (only the first fragment carries the header).
+        """
+        replies: dict[bytes, bytes] = {}
+        buffer = bytearray()
+        waiting: dict[bytes, asyncio.Event] = {}
+
+        def _on_notify(_char: BleakGATTCharacteristic, data: bytearray) -> None:
+            if data[:3] == FRAME_HEADER:
+                buffer.clear()
+            buffer.extend(data)
+            if bytes(buffer[-3:]) != FRAME_FOOTER or bytes(buffer[:3]) != FRAME_HEADER:
+                return
+            payload = bytes(buffer[4:-3])
+            buffer.clear()
+            for prefix, event in waiting.items():
+                if payload.startswith(prefix):
+                    replies[prefix] = payload
+                    event.set()
+
+        async with self._lock:
+            client = await establish_connection(
+                BleakClientWithServiceCache,
+                self._ble_device,
+                self._ble_device.name or self._ble_device.address,
+            )
+            subscribed: list[BleakGATTCharacteristic] = []
+            try:
+                write_chars, notify_chars = _control_candidates(client)
+                if not write_chars:
+                    raise RuntimeError("No writable characteristic found on device")
+                for ch in notify_chars:
+                    try:
+                        await client.start_notify(ch, _on_notify)
+                        subscribed.append(ch)
+                    except Exception as err:  # noqa: BLE001
+                        _LOGGER.debug("notify subscribe failed on %s: %s", ch.uuid, err)
+                ordered = sorted(
+                    write_chars, key=lambda c: c.uuid != self._known_write_uuid
+                )
+                for payload, prefix in frames:
+                    event = waiting.setdefault(prefix, asyncio.Event())
+                    event.clear()
+                    frame = build_frame(payload)
+                    for ch in ordered:
+                        try:
+                            await client.write_gatt_char(ch, frame, response=True)
+                        except Exception as err:  # noqa: BLE001
+                            _LOGGER.debug("write failed on %s: %s", ch.uuid, err)
+                            continue
+                        try:
+                            await asyncio.wait_for(event.wait(), timeout=CONFIRM_TIMEOUT * 2)
+                            self._known_write_uuid = ch.uuid
+                            break
+                        except asyncio.TimeoutError:
+                            continue
+                    else:
+                        raise RuntimeError(
+                            f"No reply from diffuser to {payload.hex()}"
+                        )
+            finally:
+                for ch in subscribed:
+                    try:
+                        await client.stop_notify(ch)
+                    except Exception:  # noqa: BLE001
+                        pass
+                await client.disconnect()
+        return replies
+
+    @staticmethod
+    def build_schedule_payload(day_mask: int, slots: list[dict]) -> bytes:
+        """Build the 57 16 payload for up to 5 slots (rest disabled)."""
+        if not 1 <= day_mask <= 0x7F:
+            raise ValueError("day mask must be 1..127")
+        if len(slots) > 5:
+            raise ValueError("at most 5 slots")
+        body = bytearray()
+        for i in range(5):
+            if i < len(slots):
+                s = slots[i]
+                body += bytes([s["start_h"], s["start_m"], s["end_h"], s["end_m"],
+                               1 if s.get("enabled", True) else 0])
+                body += int(s["work"]).to_bytes(2, "big")
+                body += int(s["pause"]).to_bytes(2, "big")
+            else:
+                body += bytes.fromhex("0000000000000a0078")
+        return bytes.fromhex("5716") + bytes([day_mask]) + bytes(body)
+
+    @staticmethod
+    def parse_schedule(payload: bytes) -> list[list[dict]]:
+        """Parse a 52 15 reply into 7 day-blocks of 5 slots each."""
+        data = payload[2:]
+        days: list[list[dict]] = []
+        for d in range(0, len(data) - 44, 45):
+            block = data[d:d + 45]
+            slots = []
+            for i in range(0, 45, 9):
+                c = block[i:i + 9]
+                slots.append({
+                    "start": f"{c[0]:02d}:{c[1]:02d}",
+                    "end": f"{c[2]:02d}:{c[3]:02d}",
+                    "enabled": bool(c[4]),
+                    "work": int.from_bytes(c[5:7], "big"),
+                    "pause": int.from_bytes(c[7:9], "big"),
+                })
+            days.append(slots)
+        return days
+
+    async def async_set_schedule(self, day_mask: int, slots: list[dict]) -> None:
+        """Write a schedule for the days in day_mask."""
+        payload = self.build_schedule_payload(day_mask, slots)
+        await self._exchange([(payload, bytes.fromhex("5716"))])
+
+    async def async_read_schedule(self) -> list[list[dict]]:
+        """Read the on-board schedule (7 day-blocks)."""
+        replies = await self._exchange([(bytes.fromhex("5215"), bytes.fromhex("5215"))])
+        return self.parse_schedule(replies[bytes.fromhex("5215")])
+
+    async def async_sync_clock(self) -> None:
+        """Set the diffuser's clock to local time (weekday: Mon=1)."""
+        now = dt_util.now()  # Home Assistant's configured time zone
+        payload = (
+            bytes.fromhex("5717")
+            + now.year.to_bytes(2, "big")
+            + bytes([now.month, now.day, now.hour, now.minute, now.second,
+                     now.isoweekday()])
+        )
+        await self._exchange([(payload, bytes.fromhex("5717"))])

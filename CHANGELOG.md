@@ -7,11 +7,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.3.0] - 2026-10-12
+
+### Added
+- On-board **schedule** support, decoded from app captures. New entity actions on the
+  switches: `aromadd.set_schedule` (days + up to 5 slots of start, end, work seconds,
+  pause seconds), `aromadd.read_schedule` (returns the 7 per-day blocks) and
+  `aromadd.sync_clock` (sets the unit's clock from Home Assistant's time zone).
+- Mist strength is the slot's work/pause seconds: this unit has no separate level.
+- Commands retry once if the first connection attempt times out.
+
+### Notes
+- Frame format: `57 16 <day-mask> + 5 x 9-byte slots` (start h/m, end h/m, enabled,
+  work s BE16, pause s BE16). Day mask bit 0 = Monday (confirmed); Tue..Sun are bits
+  1..6 (Tuesday confirmed on a real unit; the rest follow the same order).
+- Tested on a unit advertising as `Diffuser.A5.WIFI` (firmware `U5_A1...V1.0.20251127`).
+
 ### Planned
-- Mist intensity / fan-speed levels (capture changing the level to map values).
-- LED light control.
-- Device on-board schedules (opcode 0x5716) once the field layout is mapped from
-  targeted captures; HA automations against the switches are recommended meanwhile.
+- LED light control (capture needed).
 
 ## [0.2.5] - 2026-06-20
 

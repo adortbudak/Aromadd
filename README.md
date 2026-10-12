@@ -47,6 +47,29 @@ A5 AA AC | XOR(payload) | <payload> | C5 CC CA
 The diffuser echoes a state report (`53 …`) for each command, which the integration
 uses to confirm the real state rather than assuming it.
 
+## Schedules and clock
+
+The diffuser has an on-board schedule (5 slots per day). Mist strength is set by each
+slot's **work** and **pause** seconds. Actions (target one of the diffuser's switches):
+
+```yaml
+action: aromadd.set_schedule
+target:
+  entity_id: switch.my_diffuser_power
+data:
+  days: [mon, tue, wed, thu, fri]
+  slots:
+    - start: "08:00:00"
+      end: "22:00:00"
+      work: 10
+      pause: 120
+```
+
+- `aromadd.read_schedule` returns the stored schedule as a response (7 day blocks, Mon..Sun).
+- `aromadd.sync_clock` sets the diffuser's clock to Home Assistant's time.
+- `set_schedule` replaces the whole day: slots you don't pass are disabled.
+- Close the Aromadd phone app first; the diffuser accepts one connection at a time.
+
 ## Requirements
 
 - Home Assistant **2024.8.0** or newer

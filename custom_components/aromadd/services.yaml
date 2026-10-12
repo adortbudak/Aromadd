@@ -1,0 +1,29 @@
+set_schedule:
+  target:
+    entity:
+      integration: aromadd
+      domain: switch
+  fields:
+    days:
+      description: Days to apply the schedule to (default every day).
+      example: "[mon, tue, wed, thu, fri]"
+      selector:
+        select:
+          multiple: true
+          options: [mon, tue, wed, thu, fri, sat, sun]
+    slots:
+      description: Up to 5 slots. Each has start, end (HH:MM:SS), work and pause in seconds, and optional enabled.
+      required: true
+      example: '[{"start": "08:00:00", "end": "22:00:00", "work": 10, "pause": 120}]'
+      selector:
+        object:
+read_schedule:
+  target:
+    entity:
+      integration: aromadd
+      domain: switch
+sync_clock:
+  target:
+    entity:
+      integration: aromadd
+      domain: switch

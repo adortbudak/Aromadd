@@ -18,10 +18,19 @@ from homeassistant.exceptions import ConfigEntryNotReady
 
 from .aromadd_device import AromaddDevice
 from .const import DOMAIN
+from .schedule import ScheduleManager
+from .tank import TankTracker
 
 _LOGGER = logging.getLogger(__name__)
 
-PLATFORMS: list[Platform] = [Platform.SWITCH]
+PLATFORMS: list[Platform] = [
+    Platform.BUTTON,
+    Platform.NUMBER,
+    Platform.SELECT,
+    Platform.SENSOR,
+    Platform.SWITCH,
+    Platform.TIME,
+]
 
 
 async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
@@ -38,6 +47,10 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         )
 
     device = AromaddDevice(ble_device)
+    device.schedule = ScheduleManager(hass, device)
+    device.tank = TankTracker(hass, entry.entry_id, device.schedule)
+    await device.tank.async_load()
+    entry.async_on_unload(device.tank.async_start())
     hass.data.setdefault(DOMAIN, {})[entry.entry_id] = device
 
     @callback
@@ -57,11 +70,18 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     )
 
     await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
+    # Load the on-board schedule without delaying setup; the entities stay
+    # unavailable until it arrives (press "Reload schedule" if the phone app
+    # was holding the connection).
+    entry.async_create_background_task(
+        hass, device.schedule.async_refresh(), "aromadd initial schedule load"
+    )
     return True
 
 
 async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     """Unload a config entry."""
+    await hass.data[DOMAIN][entry.entry_id].schedule.async_shutdown()
     unload_ok = await hass.config_entries.async_unload_platforms(entry, PLATFORMS)
     if unload_ok:
         device: AromaddDevice = hass.data[DOMAIN].pop(entry.entry_id)

@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.5.0] - 2026-10-12
+
+### Added
+- `select` **Intensity** (Light, Normal, Strong). Picking one sets the run and wait seconds
+  of the active schedules for the selected day(s) (5 s / 720 s, 5 s / 360 s, 10 s / 180 s) and
+  saves automatically. It shows no selection when the schedules use custom values.
+
 ### Added
 - **Liquid estimate**: the diffuser cannot report its level, so the integration integrates
   the spraying implied by the schedule (rated 0.001 mL per second, 500 mL tank) and keeps

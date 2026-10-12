@@ -6,12 +6,12 @@ from homeassistant.components.select import SelectEntity
 
 from .const import DOMAIN
 from .entity import AromaddScheduleEntity
-from .schedule import DAY_GROUPS
+from .schedule import DAY_GROUPS, PRESETS
 
 
 async def async_setup_entry(hass, entry, async_add_entities) -> None:
     manager = hass.data[DOMAIN][entry.entry_id].schedule
-    async_add_entities([AromaddDaySelect(entry, manager)])
+    async_add_entities([AromaddDaySelect(entry, manager), AromaddIntensitySelect(entry, manager)])
 
 
 class AromaddDaySelect(AromaddScheduleEntity, SelectEntity):
@@ -29,3 +29,23 @@ class AromaddDaySelect(AromaddScheduleEntity, SelectEntity):
 
     async def async_select_option(self, option: str) -> None:
         await self._manager.async_select(option)
+
+
+class AromaddIntensitySelect(AromaddScheduleEntity, SelectEntity):
+    """Light / Normal / Strong: sets run and wait seconds of the active schedules.
+
+    Shows no selection when the schedules use custom values.
+    """
+
+    _attr_icon = "mdi:spray"
+    _attr_options = list(PRESETS)
+
+    def __init__(self, entry, manager) -> None:
+        super().__init__(entry, manager, "intensity", "Intensity")
+
+    @property
+    def current_option(self) -> str | None:
+        return self._manager.preset
+
+    async def async_select_option(self, option: str) -> None:
+        self._manager.apply_preset(option)

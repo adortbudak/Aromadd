@@ -38,6 +38,14 @@ DAY_GROUPS: dict[str, int] = {
     "Every day": 0x7F,
 }
 
+# Intensity presets: (run seconds, wait seconds) applied to the active schedules.
+# Mist strength is the run/wait ratio, so these are roughly 0.7%, 1.4% and 5.3%.
+PRESETS: dict[str, tuple[int, int]] = {
+    "Light": (5, 720),
+    "Normal": (5, 360),
+    "Strong": (10, 180),
+}
+
 STATUS_IDLE = "idle"
 STATUS_LOADING = "loading"
 STATUS_PENDING = "pending"
@@ -158,6 +166,28 @@ class ScheduleManager:
         self._cancel_timer()
         self._unsub_timer = async_call_later(self.hass, SAVE_DELAY, self._timer_fired)
         self._changed()
+
+    @property
+    def preset(self) -> str | None:
+        """Preset matching every active schedule of the selected day, else None."""
+        active = [s for s in self.working if s["enabled"]]
+        if not active:
+            return None
+        for name, (work, pause) in PRESETS.items():
+            if all(s["work"] == work and s["pause"] == pause for s in active):
+                return name
+        return None
+
+    @callback
+    def apply_preset(self, name: str) -> None:
+        """Set run/wait seconds of the active schedules to a preset."""
+        if self.week is None:
+            return
+        work, pause = PRESETS[name]
+        for slot in self.working:
+            if slot["enabled"]:
+                slot["work"], slot["pause"] = work, pause
+        self.update_slot(0)  # marks dirty, schedules the save, notifies listeners
 
     @callback
     def _timer_fired(self, _now: Any) -> None:

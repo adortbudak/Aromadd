@@ -75,6 +75,10 @@ status* shows pending/saving/saved. Schedules 3-5 are hidden by default; enable 
 entity registry. If the entities are unavailable, close the phone app and press
 *Reload schedule*.
 
+**Intensity** sets run and wait seconds for all active schedules of the selected day at
+once: *Light* 5 s on / 720 s off, *Normal* 5 s / 360 s, *Strong* 10 s / 180 s. It shows no
+selection when your schedules use custom values.
+
 When several days are selected, the slots shown come from the first day and are written to
 all of them. *Schedule summary* has a `days_differ` attribute so a dashboard can warn you.
 
